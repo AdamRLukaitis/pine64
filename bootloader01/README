@@ -1,0 +1,27 @@
+see top level README for documentation and how to run this program
+
+This is a simple uart0 based bootloader, you feed it motorola srecord
+files and then press g to run.  Careful not to overwrite the bootloader
+itself.  It technically starts at 0x41000000 but then branches over
+some space where you can run.
+
+.globl _start
+_start:
+    b   reset
+
+.space 0x20000-4,0
+
+reset:
+    mov sp,#0x42000000
+    bl notmain
+hang: b hang
+
+Need to modify that and the linker script if you want more space.
+
+MEMORY
+{
+    ram : ORIGIN = 0x41000000, LENGTH = 0x21000
+}
+
+
+

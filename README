@@ -1,0 +1,200 @@
+
+Just got my (first) PINE64 or PINE A64
+
+https://www.pine64.com
+http://wiki.pine64.org
+http://linux-sunxi.org/A64
+http://linux-sunxi.org/Pine64
+
+It sports an Allwinner A64.  Like Broadcom Allwinner is typically
+protective of their documentation.  But lately with the C.H.I.P and
+now this (and sure others) the docs are not hard to find and
+Allwinner doesnt seem to be taking them down.
+
+I have hesitated with both brands, and passed up on a great many
+allwinner based boards initially for lack of documentation.  But the
+C.H.I.P kind of won me over to try some more.  It is brickable but
+you have to work a little at it, there is a FEL jumper for that board
+that you can essentially use usb to get into the chip and re-load.
+
+This one so far appears to be sd card based like the raspberry pi.
+Unlike it though the ARM boots the system not some other processor.
+
+Naturally if you see my other stuff I have no interest in running
+Linux, I am interested in bare metal.  As with the raspberry pi
+I would love to write the first software that runs and bring up
+everything.  I dont know that the documentation is there, and I know
+when you have a full staff, software engineers, hardware (chip and pcb)
+it takes like 10 months to bring up ddr.  Granted in theory there is
+code already, actualy a BSP appears to be available.  So I am going to
+just run from the bootloader like one would if they were porting an
+operating system.
+
+I wasnt interested in one of the full blown operating system sd card
+images that take hours to download.  I found through the wiki I think
+this one
+
+https://www.stdin.xyz/downloads/people/longsleep/pine64-images/
+
+I grabbed simpleimage-pin64-latest.img.xz
+
+Then from their README.txt
+
+xzcat simpleimage-pine64-20160207-1.xz | pv |sudo dd of=/dev/sdX bs=1M oflag=sync
+
+where /dev/sdX is your sd card, yes, get this wrong and you could blow
+away a hard drive.
+
+http://linux-sunxi.org/Pine64
+
+says
+
+UART0 is the main UART used by Allwinner's firmware for boot and debug
+messages and is accessible on pins 29 (TXD), 30 (RXD), 25/34 (GND) on
+the Euler connector (this is not mentioned in the official connector
+description).
+
+And this is true so far.  Using an ftdi breakout (3.3v) of some sort
+or ftdi cable, same thing you would use for a raspberry pi or C.H.I.P
+you can see this boot, with the sd card there.
+
+All that whole page is interesting.  The uart section, the Boot sequence
+you need a special A to A usb cable (not really that special but not
+something everyone has) to run sunxi-fel.
+
+Otherwise it comes up in 32 bit mode and with the sd card tries to boot
+that.
+
+So we are hooked up to uart0, prepare our sd card plug it in.  Note
+mine was shipped with a button floating around in the bag, I thought
+it was an insect at first.  Then there was a note that said this is not
+a broken part, they basically provided one button that fits into both
+the power and reset, you get to choose and do your own soldering.  I
+get that not everyone has the tools for that.  Easy to do for the
+most part, but not something everyone has.  I naturally put mine on
+the reset.  Likewise I see they have two pads for user leds but didnt
+populate those either...
+
+We hit any key to stop autoboot and get the sunxi prompt.
+
+Unlike some uboots, this does not have an xmodem download feature.
+But that is okay, can get around that in a few ways.  Before doing
+that though
+
+http://linux-sunxi.org/A64
+
+Has the datasheets we need.  And no surprise uart0 is at or roughly
+at the same place as other allwinner chips
+
+#define UART_BASE 0x01C28000
+
+So from that prompt if we were to write a byte to the transmit register
+(offset 0) it should show.
+
+
+Hit any key to stop autoboot:  0
+sunxi#mw.b 0x01c28000 0x55
+Usunxi#mw.b 0x01c28000 0x56
+Vsunxi#
+
+So we are not well on our way to doing something.
+
+the printenv command shows us this
+
+kernel_filename=pine64/Image
+load_addr=41000000
+
+So lets start with 0x41000000 as the base address in ram where we do
+stuff.
+
+No LEDs installed so an LED blinker is not the first example.
+uart01 is.
+
+I generate an additional output which is a dump of the binary in a
+way that we can literally cut and paste it into the terminal with uboot.
+
+mw.l 0x41000000 0xEAFFFFFF
+mw.l 0x41000004 0xE3A0D442
+mw.l 0x41000008 0xE28DDA01
+mw.l 0x4100000C 0xEB00003B
+mw.l 0x41000010 0xEAFFFFFE
+mw.l 0x41000014 0xE5801000
+mw.l 0x41000018 0xE12FFF1E
+mw.l 0x4100001C 0xE5900000
+...
+
+If you cut and paste the whole thing in, then use the go command
+to run from 0x41000000, uart01 echoes back what you type.
+
+sunxi#mw.l 0x41000134 0xEAFFFFF6
+sunxi#mw.l 0x41000138 0x12345678
+sunxi#go 0x41000000
+## Starting application at 0x41000000 ...
+12345678
+asdf
+
+Major progress.  Really want a bootloader with a way to download
+programs (over the uart).  I have historically used proprietary
+things, xmodem, intel hex, and now am switching to motorola srecord.
+
+https://en.wikipedia.org/wiki/SREC_(file_format)
+
+I like the S3 format with a full 32 bit address...
+
+So bootloader01 is that bootloader.
+
+It leaves a little room for programs to be downloaded.
+
+.globl _start
+_start:
+    b   reset
+
+.space 0x20000-4,0
+
+reset:
+    mov sp,#0x42000000
+    bl notmain
+hang: b hang
+
+can of course make that larger if you want.
+
+You can take the mw.l approach and then probably use tools to write
+that to the sd card which is our storage.  Or better than that just
+pull the sd card, copy notmain.bin in the bootloader01 directory to
+lets say /mount/whatever/BOOT/bootloader.img
+
+wherever you have it mounted, mine shows up with three mounts the
+BOOT one is the one you want.
+
+Power on or reset with that card, hit any key to stop autoboot.
+
+Now this part could have been done against files on the filesystem
+too, but I have not messed with that yet.
+
+sunxi#setenv bootcmd 'fatload mmc 0:1 41000000 bootloader.img; go 0x41000000'
+sunxi#saveenv
+
+Now when you reset/reboot, it boots into this bootloader if you dont
+press a key to stop autoboot.
+
+reading bootloader.img
+131964 bytes read in 17 ms (7.4 MiB/s)
+## Starting application at 0x41000000 ...
+12345678
+
+SREC
+
+And now we can for example take the uart01 example and download in
+ascii or raw mode or whatever your dumb terminal calls it (or cut
+and paste) using the notmain.srec file.  With minicom ctrl-a then
+s then down (or up) to ascii, then the path to the file.  Once
+downloaded then press g for go and it will start the program you
+downloaded.  If uart01 then you can type stuff and it echos back out.
+
+SREC
+41000000
+12345678
+asdfasdf
+
+So now we have an easy way to load and run programs.  And you can see
+why soldering the loose button to reset was a good idea.
